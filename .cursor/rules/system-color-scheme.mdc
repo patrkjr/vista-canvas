@@ -1,0 +1,21 @@
+---
+description: Follow the OS color scheme for the spatial design canvas
+alwaysApply: true
+---
+
+# System color scheme
+
+Theme follows `prefers-color-scheme`. No in-app light/dark toggle unless the user asks for one.
+
+- Put new colors in `src/canvas/styles.css` as CSS variables. Add both the light `:root` value and the `@media (prefers-color-scheme: dark)` value in the same change.
+- Paint with tokens (`var(--bg)`, `var(--ink)`, `var(--panel)`, `var(--border)`, `var(--accent)`, shadows, `--iframe-bg`). Do not hardcode light-only hex in canvas CSS or renderer-created elements.
+- Keep `color-scheme: light dark` on `:root` and `<meta name="color-scheme" content="light dark">` on canvas HTML shells.
+- Preview iframes use the mock app’s own system theme. Do not force the iframe to light.
+
+```css
+/* ❌ BAD */
+.node { background: #fffdf8; border-color: #d6d3d1; }
+
+/* ✅ GOOD */
+.node { background: var(--panel); border-color: var(--border); }
+```

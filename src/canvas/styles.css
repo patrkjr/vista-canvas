@@ -1,0 +1,817 @@
+@property --iframe-scale {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.328125;
+}
+
+:root {
+  color-scheme: light dark;
+  --bg: #f3f0ea;
+  --ink: #1c1917;
+  --muted: #78716c;
+  --panel: #fffdf8;
+  --border: #d6d3d1;
+  --accent: #0f766e;
+  --accent-soft: #ccfbf1;
+  --selected: #115e59;
+  --dot: rgba(28, 25, 23, 0.38);
+  --shadow: 0 10px 30px rgba(28, 25, 23, 0.08);
+  --shadow-deep: 0 28px 80px rgba(28, 25, 23, 0.32);
+  --shadow-lift: 0 18px 50px rgba(28, 25, 23, 0.18);
+  --shadow-drag: 0 16px 40px rgba(28, 25, 23, 0.18);
+  --edge: #a8a29e;
+  --mount: #0c1222;
+  --iframe-bg: #fffdf8;
+  --status-fg: #e2e8f0;
+  --status-bg: rgba(12, 18, 34, 0.92);
+  --status-native-bg: #1e293b;
+  --scrim-mix: #1c1917;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1815;
+    --ink: #e7e5e4;
+    --muted: #a8a29e;
+    --panel: #292524;
+    --border: #44403c;
+    --accent: #2dd4bf;
+    --accent-soft: #134e4a;
+    --selected: #5eead4;
+    --dot: rgba(231, 229, 228, 0.28);
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    --shadow-deep: 0 28px 80px rgba(0, 0, 0, 0.55);
+    --shadow-lift: 0 18px 50px rgba(0, 0, 0, 0.4);
+    --shadow-drag: 0 16px 40px rgba(0, 0, 0, 0.4);
+    --edge: #78716c;
+    --mount: #0c0a09;
+    --iframe-bg: #171f2a;
+    --status-fg: #e7e5e4;
+    --status-bg: rgba(12, 10, 9, 0.92);
+    --status-native-bg: #1c1917;
+    --scrim-mix: #0c0a09;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 2;
+}
+
+.brand {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.zoom-btn {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0.35rem 0.85rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.zoom-btn-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+}
+
+.zoom-btn:last-child {
+  border-right: 0;
+}
+
+.zoom-btn:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+
+.zoom-btn.is-active {
+  color: var(--selected);
+  background: var(--accent-soft);
+}
+
+.zoom-btn:disabled,
+.zoom-btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewport {
+  position: relative;
+  width: 100%;
+  height: calc(100% - 3.1rem);
+  overflow: hidden;
+  cursor: default;
+  background: var(--bg);
+  outline: none;
+  --focus-t: 0;
+}
+
+.viewport.is-space-pan {
+  cursor: grab;
+}
+
+.viewport.is-panning {
+  cursor: grabbing;
+}
+
+.viewport.is-focused {
+  cursor: grab;
+}
+
+.focus-scrim {
+  --fog: color-mix(in srgb, var(--bg) 70%, var(--scrim-mix));
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: var(--focus-t);
+  background: color-mix(in srgb, var(--fog) 89%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition: opacity 480ms ease;
+}
+
+.focus-scrim.is-visible {
+  pointer-events: auto;
+}
+
+.viewport.is-focus-instant .focus-scrim {
+  transition: none;
+}
+
+.focus-front {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.focus-front .node {
+  pointer-events: auto;
+}
+
+.node.is-focus-raised {
+  box-shadow:
+    var(--shadow-lift),
+    0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.node.is-state-enter {
+  animation: state-enter 320ms ease-out both;
+  animation-delay: calc(var(--stagger, 0) * 70ms);
+}
+
+.node.is-state-leave {
+  animation: state-leave 280ms ease-in both;
+  pointer-events: none;
+}
+
+.viewport.is-focus-instant .node.is-state-enter,
+.viewport.is-focus-instant .node.is-state-leave {
+  animation: none;
+}
+
+@keyframes state-enter {
+  from {
+    opacity: 0;
+    translate: 14px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0;
+  }
+}
+
+@keyframes state-leave {
+  to {
+    opacity: 0;
+    translate: 10px 0;
+  }
+}
+
+.focus-back-btn {
+  position: absolute;
+  top: 0.85rem;
+  left: 0.85rem;
+  z-index: 6;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.focus-back-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--selected);
+}
+
+.focus-back-btn[hidden] {
+  display: none;
+}
+
+.edit-composer {
+  position: absolute;
+  left: 0.85rem;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-width: 42rem;
+  margin-inline: auto;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+}
+
+.edit-composer[hidden] {
+  display: none;
+}
+
+.edit-composer-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.edit-composer-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 2.6rem;
+  max-height: 8rem;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.edit-composer-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.edit-composer-input:disabled {
+  opacity: 0.7;
+}
+
+.edit-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.edit-composer-status {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-composer-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.edit-composer-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.edit-composer-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--selected);
+}
+
+.edit-composer-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.edit-composer-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+
+.edit-composer-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  border-color: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  color: var(--panel);
+}
+
+.edit-composer[data-busy='true'] .edit-composer-btn-primary {
+  opacity: 0.55;
+}
+
+.zoom-readout {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 6;
+  pointer-events: none;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  box-shadow: var(--shadow);
+  user-select: none;
+}
+
+.canvas-dots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(circle at center, var(--dot) 1.1px, transparent 1.2px);
+  background-size: 24px 24px;
+  background-position: 0 0;
+  background-repeat: repeat;
+}
+
+.world {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  /* will-change is toggled from render.ts during active camera gestures only —
+     a permanent layer caches raster at first-paint zoom and blurs stills on zoom-in. */
+  z-index: 1;
+}
+
+.viewport.is-focused .world {
+  pointer-events: none;
+}
+
+.node.is-fixture-hidden {
+  display: none !important;
+}
+
+.viewport.is-focused.is-panning,
+.viewport.is-focused.is-space-pan {
+  cursor: grabbing;
+}
+
+.viewport.is-focused .edges {
+  opacity: calc(1 - var(--focus-t));
+  pointer-events: none;
+}
+
+.viewport[data-focus-phase='lowering'] .focus-back-btn,
+.viewport[data-focus-phase='lowering'] .edit-composer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.edge-line {
+  stroke: var(--edge);
+  stroke-width: 2;
+  fill: none;
+  transition: opacity 180ms ease;
+}
+
+.edge-line.is-dimmed {
+  opacity: 0.12;
+}
+
+.edge-line.is-nav {
+  stroke-dasharray: 6 5;
+  stroke: var(--muted);
+}
+
+.edge-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-family: inherit;
+  transition: opacity 180ms ease;
+}
+
+.edge-label.is-dimmed {
+  opacity: 0.12;
+}
+
+.node {
+  position: absolute;
+  width: 220px;
+  height: 148px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  cursor: grab;
+  user-select: none;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    width 160ms ease,
+    height 160ms ease,
+    opacity 180ms ease;
+}
+
+.node:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.node.is-selected {
+  border-color: var(--selected);
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    var(--shadow);
+}
+
+.node.is-dimmed {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.node.is-dragging {
+  cursor: grabbing;
+  z-index: 5;
+  opacity: 0.96;
+  box-shadow:
+    var(--shadow-drag),
+    0 0 0 3px var(--accent-soft);
+  transition: none;
+}
+
+.node.is-lifting,
+.node.is-focused,
+.node.is-on-sheet {
+  cursor: default;
+  opacity: 1;
+  z-index: 8;
+}
+
+.node.is-lifting {
+  transition: none;
+}
+
+/* In-card header is unused — titles render in screen-space (.node-chrome-label). */
+.node-header {
+  display: none;
+}
+
+.node-title {
+  margin: 0;
+  display: none;
+}
+
+.node-screen-title {
+  margin: 0;
+  padding: 0.9rem 1rem 0;
+  font-size: 1rem;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.node.has-mount .node-screen-title {
+  display: none;
+}
+
+.node:not(.has-mount) {
+  padding-bottom: 0.15rem;
+}
+
+.node-chrome-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Fixed-scale title above the card — left aligned, width = title. */
+.node-chrome-label {
+  position: absolute;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: max-content;
+  max-width: min(420px, calc(100% - 12px));
+  height: 22px;
+  padding: 0 0.45rem;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 20px;
+  white-space: nowrap;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.node-chrome-label > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Focus-view state count — same chrome label language, pill shape, right of title. */
+.node-chrome-states {
+  position: absolute;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  height: 22px;
+  padding: 0 0.55rem;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 20px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  pointer-events: none;
+}
+
+.node-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem 1rem 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.node-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0.55rem 1rem 0.9rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.node.has-mount .node-meta,
+.node.has-mount .node-badge {
+  display: none;
+}
+
+.node-mount {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+  background: var(--mount);
+  overflow: hidden;
+  position: relative;
+}
+
+.node[data-zoom-level="macro"] .node-mount {
+  display: none;
+}
+
+.viewport-adapter {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Adapter classes are applied on .node-mount — keep it in the flex column
+   under the header instead of covering the whole card. */
+.node-mount.viewport-adapter {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: auto;
+}
+
+.viewport-iframe {
+  display: block;
+  width: var(--iframe-frame-width, 1280px);
+  height: var(--iframe-frame-height, 800px);
+  border: 0;
+  background: var(--iframe-bg);
+  transform-origin: 0 0;
+  transform: scale(var(--iframe-scale, 0.328125));
+}
+
+.node-mount.viewport-adapter--snapshot {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-self: stretch;
+  background: var(--iframe-bg);
+  /* Clip the native-size still after CSS scale (same as live iframes). */
+  overflow: hidden;
+}
+
+.viewport-snapshot {
+  display: block;
+  width: var(--iframe-frame-width, 1280px);
+  height: var(--iframe-frame-height, 800px);
+  object-fit: fill;
+  border: 0;
+  background: var(--iframe-bg);
+  transform-origin: 0 0;
+  transform: scale(var(--iframe-scale, 0.328125));
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viewport-snapshot.is-loaded {
+  opacity: 1;
+}
+
+.node[data-zoom-level='meso'] .viewport-snapshot,
+.node[data-zoom-level='workspace'] .viewport-snapshot,
+.node.is-on-sheet .viewport-snapshot {
+  transform: scale(var(--iframe-scale, 1));
+}
+
+.viewport-snapshot-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(
+      110deg,
+      var(--mount) 0%,
+      var(--panel) 40%,
+      var(--mount) 80%
+    );
+  background-size: 200% 100%;
+  animation: snapshot-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes snapshot-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.node[data-zoom-level='meso'] .viewport-iframe,
+.node[data-zoom-level='workspace'] .viewport-iframe,
+.node.is-on-sheet .viewport-iframe {
+  transform: scale(var(--iframe-scale, 1));
+}
+
+
+.viewport-adapter-status {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 0.75rem;
+  text-align: center;
+  white-space: pre-line;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--status-fg);
+  background: var(--status-bg);
+}
+
+.viewport-adapter-status[hidden] {
+  display: none;
+}
+
+.viewport-adapter--native .viewport-adapter-status {
+  background: var(--status-native-bg);
+}

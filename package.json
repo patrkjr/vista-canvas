@@ -1,0 +1,46 @@
+{
+  "name": "spatial-design-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Repo-agnostic spatial live-code design canvas (webapp + MCP App adapter + Agent Skills)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "spatial-design-canvas-mcp": "./dist/mcp/main.js"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,ui,tsc -c teal,cyan,gray \"npm:dev:api\" \"npm:dev:ui\" \"npm:dev:server\"",
+    "dev:api": "tsx watch src/web/main.ts",
+    "dev:ui": "cross-env NODE_ENV=development CANVAS_BUILD_MODE=web vite",
+    "dev:server": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "build": "npm run clean && tsc -p tsconfig.json && npm run build:web && npm run build:mcp-ui",
+    "build:web": "cross-env CANVAS_BUILD_MODE=web vite build",
+    "build:mcp-ui": "cross-env CANVAS_BUILD_MODE=mcp vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.canvas.json --noEmit",
+    "start": "node dist/index.js",
+    "start:mcp": "node dist/mcp/main.js",
+    "start:web": "node dist/web/main.js",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "concurrently": "^10.0.7",
+    "cross-env": "^10.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vite": "^8.3.8",
+    "vite-plugin-singlefile": "^2.3.4"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.4.2",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/ext-apps": "^2.0.4",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "playwright": "^1.65.1",
+    "zod": "^4.6.7"
+  }
+}
