@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Vista Canvas — Demo</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport" class="viewport" tabindex="0">
+        <svg id="edges" class="edges" aria-hidden="true"></svg>
+        <div id="world" class="world"></div>
+        <div class="canvas-dock" aria-label="View mode">
+          <div
+            id="zoom-controls"
+            class="zoom-controls"
+            role="group"
+            aria-label="Overview level"
+          >
+            <button type="button" class="zoom-btn" data-zoom-level="macro" aria-pressed="true">
+              <svg class="zoom-btn-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="1.5" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <rect x="9.5" y="1.5" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <rect x="5.5" y="9.5" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M4 6.5v1.25c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V6.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" />
+              </svg>
+              Node view
+            </button>
+            <button type="button" class="zoom-btn" data-zoom-level="meso" aria-pressed="false">
+              <svg class="zoom-btn-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2.5" width="13" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M1.5 5h13" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <circle cx="3.75" cy="3.75" r="0.65" fill="currentColor" />
+                <circle cx="5.75" cy="3.75" r="0.65" fill="currentColor" />
+              </svg>
+              Live preview
+            </button>
+          </div>
+        </div>
+        <div class="scale-controls" role="group" aria-label="Zoom level">
+          <button type="button" class="scale-btn" data-zoom-action="out" aria-label="Zoom out">
+            −
+          </button>
+          <button
+            type="button"
+            class="scale-btn scale-readout"
+            data-zoom-action="reset"
+            aria-label="Reset zoom to 100%"
+          >
+            100%
+          </button>
+          <button type="button" class="scale-btn" data-zoom-action="in" aria-label="Zoom in">
+            +
+          </button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/canvas/host-static-entry.ts"></script>
+  </body>
+</html>

@@ -53,11 +53,12 @@ export class WebIframeAdapter implements ViewportAdapter {
     });
 
     // Soft timeout: if the bank isn't running, surface a hint (iframe may still hang).
+    // Static demos load federation remotes over the network — allow a longer settle.
     this.loadTimer = window.setTimeout(() => {
       if (!iframe.classList.contains('is-loaded')) {
         this.showUnavailable(context.previewUrl);
       }
-    }, 4000);
+    }, 12000);
 
     host.appendChild(iframe);
   }

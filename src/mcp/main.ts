@@ -9,6 +9,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('[spatial-design-canvas] MCP server failed to start:', error);
+  console.error('[vista-canvas] MCP server failed to start:', error);
   process.exit(1);
 });

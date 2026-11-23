@@ -1,7 +1,6 @@
 import { createViewportNode, type ViewportNodeHandle } from '../adapters/viewport-node';
 import { mesoBoxSize, nativeFrame, overviewBoxSize } from '../adapters/types';
 import { buildPreviewUrl, resolvePreviewPath } from '../adapters/preview-url';
-import { mountEditComposer, type EditComposerHandle } from './edit-composer';
 import {
   preferredColorScheme,
   SnapshotObjectCache,
@@ -28,7 +27,14 @@ const DOT_GRID_MIN_SCREEN = 16;
 const DOT_GRID_MAX_SCREEN = 36;
 const MIN_ZOOM = 0.01; // 1%
 const MAX_ZOOM = 5; // 500%
-const ZOOM_STEP = 1.08;
+/** Discrete step for mouse-wheel notches (cmd/ctrl + scroll). */
+const WHEEL_ZOOM_STEP = 1.06;
+/**
+ * Trackpad pinch (ctrl + pixel deltas) — lower = less sensitive.
+ * Applied as exp(-deltaY * intensity) so magnitude tracks the gesture.
+ */
+const PINCH_ZOOM_INTENSITY = 0.0032;
+const BUTTON_ZOOM_STEP = 1.25;
 /** Gap between the focused screen and its state cards. */
 const STATE_GAP_PX = 28;
 /** Fog fade + first state card. */
@@ -38,7 +44,7 @@ const SNAPSHOT_FRUSTUM_PAD_PX = 200;
 
 export interface CanvasRendererOptions {
   host: CanvasHost;
-  statusEl: HTMLElement;
+  statusEl?: HTMLElement | null;
   viewportEl: HTMLElement;
   worldEl: HTMLElement;
   edgesEl: SVGSVGElement;
@@ -56,7 +62,7 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
   applyDocument: (doc: DesignCanvasDocument, status: string) => void;
   destroy: () => void;
 } {
-  const { host, statusEl, viewportEl, worldEl, edgesEl, zoomControlsEl } = options;
+  const { host, viewportEl, worldEl, edgesEl, zoomControlsEl } = options;
   sdcGlobal.__sdcTeardown?.();
 
   let documentState: DesignCanvasDocument | null = null;
@@ -100,16 +106,18 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
   const focusFrontEl = ensureFocusFront(viewportEl);
   viewportEl.querySelector('.focus-sheet')?.remove();
   const backBtn = ensureBackButton(viewportEl);
-  const zoomReadoutEl = ensureZoomReadout(viewportEl);
-  const editComposer: EditComposerHandle | null =
-    host.requestEdit && host.resetEdit
-      ? mountEditComposer(viewportEl, {
-          requestEdit: (prompt, nodeId) => host.requestEdit!(prompt, nodeId),
-          resetEdit: () => host.resetEdit!(),
-          ...(host.cancelEdit ? { cancelEdit: () => host.cancelEdit!() } : {}),
-          ...(host.onEdit ? { onEdit: (handler) => host.onEdit!(handler) } : {}),
-        })
-      : null;
+  const scaleControlsEl = viewportEl.querySelector<HTMLElement>('.scale-controls');
+  const zoomReadoutEl =
+    scaleControlsEl?.querySelector<HTMLElement>('.scale-readout') ??
+    ensureZoomReadout(viewportEl);
+  const mapBtn = ensureMapButton(viewportEl, Boolean(host.mapApplication));
+  const layoutBtn = ensureLayoutButton(viewportEl, Boolean(host.autoLayout));
+  let mapBusy = false;
+  let layoutBusy = false;
+  /** Chrome-label drag (header pill) — separate from ViewportNode pointer capture. */
+  let chromeDragPointerId: number | null = null;
+  let chromeDragNodeId: string | null = null;
+  let chromeDragMoved = false;
   const nodeHandles = new Map<string, ViewportNodeHandle>();
   const snapshotCache = new SnapshotObjectCache();
   const snapshotErrors = new Map<string, string>();
@@ -128,8 +136,8 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     if (documentState) render();
   });
 
-  function setStatus(message: string): void {
-    statusEl.textContent = message;
+  function setStatus(_message: string): void {
+    // Status chrome removed — keep call sites for future diagnostics.
   }
 
   function isFocused(): boolean {
@@ -174,7 +182,8 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
 
     syncZoomControls();
     syncBackButton();
-    syncEditComposer();
+    syncMapButton();
+    syncLayoutButton();
     syncViewportFocusClass();
     syncZoomReadout();
     render();
@@ -242,6 +251,11 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
 
   function syncZoomReadout(): void {
     zoomReadoutEl.textContent = `${Math.round(zoom * 100)}%`;
+    if (!scaleControlsEl) return;
+    const outBtn = scaleControlsEl.querySelector<HTMLButtonElement>('[data-zoom-action="out"]');
+    const inBtn = scaleControlsEl.querySelector<HTMLButtonElement>('[data-zoom-action="in"]');
+    if (outBtn) outBtn.disabled = zoom <= MIN_ZOOM;
+    if (inBtn) inBtn.disabled = zoom >= MAX_ZOOM;
   }
 
   function prefersReducedMotion(): boolean {
@@ -275,6 +289,42 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
       x: vp.width / 2 - worldCx * zoom,
       y: vp.height / 2 - worldCy * zoom,
     };
+  }
+
+  /** Fit modules/screens into the real viewport after Map / Auto layout. */
+  function fitOverviewToContent(): void {
+    if (!documentState || isFocused() || focusPhase !== 'idle') return;
+    const nodes = documentState.nodes.filter(
+      (node) => node.kind === 'module' || node.kind === 'screen'
+    );
+    if (nodes.length === 0) return;
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const node of nodes) {
+      const size = overviewBoxSize(semanticLevel, node.frame);
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y - 40);
+      maxX = Math.max(maxX, node.position.x + size.width);
+      maxY = Math.max(maxY, node.position.y + size.height);
+    }
+
+    const vp = viewportEl.getBoundingClientRect();
+    const pad = 72;
+    const contentW = Math.max(1, maxX - minX + pad * 2);
+    const contentH = Math.max(1, maxY - minY + pad * 2);
+    // Leave room for the bottom dock.
+    const usableH = Math.max(240, vp.height - 96);
+    const nextZoom = clamp(Math.min(1, vp.width / contentW, usableH / contentH), MIN_ZOOM, MAX_ZOOM);
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    panX = vp.width / 2 - centerX * nextZoom;
+    panY = usableH / 2 + 24 - centerY * nextZoom;
+    zoom = nextZoom;
+    renderTransformOnly();
+    commitOverviewCamera();
   }
 
   function animatePanTo(targetX: number, targetY: number): Promise<void> {
@@ -382,13 +432,39 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     };
   }
 
-  function syncMesoStill(node: CanvasNode, handle: ViewportNodeHandle): void {
+  /** Static / MCP hosts have no Playwright stills — use live iframes instead. */
+  function overviewUsesLiveIframes(): boolean {
+    return typeof host.getSnapshot !== 'function';
+  }
+
+  function syncNodePreview(
+    node: CanvasNode,
+    handle: ViewportNodeHandle,
+    options: { interactive: boolean; preferLive?: boolean }
+  ): void {
     const previewPath = resolvePreviewPath(node.route, node.previewPath);
     if (semanticLevel === 'macro' || !previewPath) {
       handle.syncAdapter('macro', null);
       return;
     }
     const frame = nativeFrame(node.frame);
+    const previewUrl = buildPreviewUrl(appOrigin, previewPath);
+    const useLive =
+      options.preferLive === true || overviewUsesLiveIframes() || options.interactive;
+
+    if (useLive) {
+      handle.syncAdapter('meso', {
+        nodeId: node.id,
+        title: node.title,
+        previewUrl,
+        semanticZoomLevel: 'meso',
+        interactive: options.interactive,
+        mode: 'live',
+        frame,
+      });
+      return;
+    }
+
     const snapKey = snapshotKeyForNode(node);
     const snapId = snapKey ? SnapshotObjectCache.keyOf(snapKey) : null;
     const cachedUrl = snapKey ? snapshotCache.get(snapKey) : null;
@@ -396,15 +472,22 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     handle.syncAdapter('meso', {
       nodeId: node.id,
       title: node.title,
-      previewUrl: buildPreviewUrl(appOrigin, previewPath),
+      previewUrl,
       semanticZoomLevel: 'meso',
       interactive: false,
       mode: 'still',
       frame,
       snapshotUrl: cachedUrl,
       snapshotError: snapError
-        ? `Start mock-bank-mfe on :4200\n(${buildPreviewUrl(appOrigin, previewPath)})`
+        ? `Start mock-bank-mfe on :4200\n(${previewUrl})`
         : null,
+    });
+  }
+
+  function syncMesoStill(node: CanvasNode, handle: ViewportNodeHandle): void {
+    syncNodePreview(node, handle, {
+      interactive: node.id === focusedNodeId,
+      preferLive: focusPhase !== 'idle',
     });
   }
 
@@ -611,42 +694,9 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
           onFocus: (id) => {
             void focusNode(id);
           },
-          onDragBegin: (id, event) => {
-            if (isFocused() || spaceHeld) return false;
-            const current = documentState?.nodes.find((n) => n.id === id);
-            if (!current || current.kind === 'fixture') return false;
-            draggingNodeId = id;
-            dragOriginWorldX = current.position.x;
-            dragOriginWorldY = current.position.y;
-            dragPointerStartX = event.clientX;
-            dragPointerStartY = event.clientY;
-            return true;
-          },
-          onDragMove: (id, clientX, clientY) => {
-            if (draggingNodeId !== id || !documentState) return;
-            const dx = (clientX - dragPointerStartX) / zoom;
-            const dy = (clientY - dragPointerStartY) / zoom;
-            const nextX = dragOriginWorldX + dx;
-            const nextY = dragOriginWorldY + dy;
-            const nodes = documentState.nodes.map((n) =>
-              n.id === id ? { ...n, position: { x: nextX, y: nextY } } : n
-            );
-            documentState = { ...documentState, nodes };
-            const h = nodeHandles.get(id);
-            h?.setPosition(nextX, nextY);
-            h?.setDragging(true);
-            redrawEdges();
-            syncChromeLabels();
-          },
-          onDragEnd: (id, didMove) => {
-            const h = nodeHandles.get(id);
-            h?.setDragging(false);
-            draggingNodeId = null;
-            if (!didMove || !documentState) return;
-            const dragged = documentState.nodes.find((n) => n.id === id);
-            if (!dragged) return;
-            void persistNodePosition(id, dragged.position.x, dragged.position.y);
-          },
+          onDragBegin: (id, event) => beginNodeDrag(id, event.clientX, event.clientY),
+          onDragMove: (id, clientX, clientY) => moveNodeDrag(id, clientX, clientY),
+          onDragEnd: (id, didMove) => endNodeDrag(id, didMove),
         });
         nodeHandles.set(node.id, handle);
         worldEl.appendChild(handle.root);
@@ -688,23 +738,9 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
       if (semanticLevel === 'macro' || !previewPath) {
         handle.syncAdapter('macro', null);
       } else {
-        const frame = nativeFrame(node.frame);
-        const snapKey = snapshotKeyForNode(node);
-        const snapId = snapKey ? SnapshotObjectCache.keyOf(snapKey) : null;
-        const cachedUrl = snapKey ? snapshotCache.get(snapKey) : null;
-        const snapError = snapId ? snapshotErrors.get(snapId) : undefined;
-        handle.syncAdapter('meso', {
-          nodeId: node.id,
-          title: node.title,
-          previewUrl: buildPreviewUrl(appOrigin, previewPath),
-          semanticZoomLevel: 'meso',
-          interactive: false,
-          mode: 'still',
-          frame,
-          snapshotUrl: cachedUrl,
-          snapshotError: snapError
-            ? `Start mock-bank-mfe on :4200\n(${buildPreviewUrl(appOrigin, previewPath)})`
-            : null,
+        syncNodePreview(node, handle, {
+          interactive: nodeIsRaised && node.id === activeFocusId,
+          preferLive: nodeIsRaised,
         });
       }
     }
@@ -846,6 +882,8 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
       const handle = nodeHandles.get(node.id);
       const previewPath = resolvePreviewPath(node.route, node.previewPath);
       if (!handle || !previewPath) continue;
+      // Snapshot refresh only applies to still overview mounts.
+      if (overviewUsesLiveIframes() || focusPhase !== 'idle') continue;
       handle.syncAdapter('meso', {
         nodeId: node.id,
         title: node.title,
@@ -939,7 +977,7 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     if (!documentState?.view.selectedNodeId) return;
     try {
       const doc = await host.selectNode(null);
-      applyDocument(doc);
+      applyDocument(doc, 'Selection cleared');
     } catch (error) {
       setStatus(errorMessage(error));
     }
@@ -950,10 +988,56 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     return Boolean(
       target.closest('.node') ||
         target.closest('.focus-back-btn') ||
-        target.closest('.edit-composer') ||
+        target.closest('.canvas-dock') ||
+        target.closest('.map-app-btn') ||
+        target.closest('.node-chrome-label') ||
         target.closest('.zoom-controls') ||
+        target.closest('.scale-controls') ||
         target.closest('.zoom-readout')
     );
+  }
+
+  function beginNodeDrag(id: string, clientX: number, clientY: number): boolean {
+    if (isFocused() || spaceHeld) return false;
+    const current = documentState?.nodes.find((n) => n.id === id);
+    if (!current || current.kind === 'fixture') return false;
+    draggingNodeId = id;
+    dragOriginWorldX = current.position.x;
+    dragOriginWorldY = current.position.y;
+    dragPointerStartX = clientX;
+    dragPointerStartY = clientY;
+    return true;
+  }
+
+  function moveNodeDrag(id: string, clientX: number, clientY: number): void {
+    if (draggingNodeId !== id || !documentState) return;
+    const dx = (clientX - dragPointerStartX) / zoom;
+    const dy = (clientY - dragPointerStartY) / zoom;
+    const nextX = dragOriginWorldX + dx;
+    const nextY = dragOriginWorldY + dy;
+    const nodes = documentState.nodes.map((n) =>
+      n.id === id ? { ...n, position: { x: nextX, y: nextY } } : n
+    );
+    documentState = { ...documentState, nodes };
+    const h = nodeHandles.get(id);
+    h?.setPosition(nextX, nextY);
+    h?.setDragging(true);
+    redrawEdges();
+    syncChromeLabels();
+  }
+
+  function endNodeDrag(id: string, didMove: boolean): void {
+    const h = nodeHandles.get(id);
+    h?.setDragging(false);
+    const label = chromeLayerEl.querySelector<HTMLElement>(
+      `[data-chrome-node="${CSS.escape(id)}"]`
+    );
+    label?.classList.remove('is-dragging');
+    draggingNodeId = null;
+    if (!didMove || !documentState) return;
+    const dragged = documentState.nodes.find((n) => n.id === id);
+    if (!dragged) return;
+    void persistNodePosition(id, dragged.position.x, dragged.position.y);
   }
 
   function onViewportClick(event: MouseEvent): void {
@@ -1005,12 +1089,6 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     backBtn.hidden = !isFocused();
   }
 
-  function syncEditComposer(): void {
-    if (!editComposer) return;
-    editComposer.setVisible(isFocused());
-    editComposer.setFocusedNodeId(focusedNodeId);
-  }
-
   function syncViewportFocusClass(): void {
     viewportEl.classList.toggle(
       'is-focused',
@@ -1029,6 +1107,30 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     void setSemanticLevel(raw);
   }
 
+  function zoomByFactor(factor: number): void {
+    const rect = viewportEl.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const worldX = (cx - panX) / zoom;
+    const worldY = (cy - panY) / zoom;
+    const nextZoom = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    if (nextZoom === zoom) return;
+    panX = cx - worldX * nextZoom;
+    panY = cy - worldY * nextZoom;
+    zoom = nextZoom;
+    commitOverviewCamera();
+    renderTransformOnly();
+  }
+
+  function onScaleControlClick(event: Event): void {
+    const target = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-zoom-action]');
+    if (!target?.dataset.zoomAction) return;
+    const action = target.dataset.zoomAction;
+    if (action === 'in') zoomByFactor(BUTTON_ZOOM_STEP);
+    else if (action === 'out') zoomByFactor(1 / BUTTON_ZOOM_STEP);
+    else if (action === 'reset') resetZoomTo100();
+  }
+
   function onWheel(event: WheelEvent): void {
     event.preventDefault();
     markCameraMoving();
@@ -1040,8 +1142,15 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
       const cursorY = event.clientY - rect.top;
       const worldX = (cursorX - panX) / zoom;
       const worldY = (cursorY - panY) / zoom;
-      const direction = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      const nextZoom = clamp(zoom * direction, MIN_ZOOM, MAX_ZOOM);
+      // Pinch sends continuous pixel deltas; mouse wheels send line/page notches.
+      const factor =
+        event.deltaMode === WheelEvent.DOM_DELTA_PIXEL
+          ? Math.exp(-event.deltaY * PINCH_ZOOM_INTENSITY)
+          : event.deltaY < 0
+            ? WHEEL_ZOOM_STEP
+            : 1 / WHEEL_ZOOM_STEP;
+      const nextZoom = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+      if (nextZoom === zoom) return;
       panX = cursorX - worldX * nextZoom;
       panY = cursorY - worldY * nextZoom;
       zoom = nextZoom;
@@ -1134,7 +1243,13 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     const target = event.target as HTMLElement;
 
     if (!spaceHeld) return;
-    if (target.closest('.node')) return;
+    if (
+      target.closest('.node') ||
+      target.closest('.canvas-dock') ||
+      target.closest('.scale-controls')
+    ) {
+      return;
+    }
 
     isPanning = true;
     panPointerId = event.pointerId;
@@ -1230,7 +1345,10 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
         label.dataset.chromeNode = id;
         const span = document.createElement('span');
         label.append(span);
+        wireChromeLabelDrag(label);
         chromeLayerEl.append(label);
+      } else if (!label.dataset.dragBound) {
+        wireChromeLabelDrag(label);
       }
 
       const textEl = label.firstElementChild as HTMLElement;
@@ -1329,13 +1447,128 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
   window.addEventListener('resize', onViewportResize);
   colorSchemeQuery.addEventListener('change', onColorSchemeChange);
   zoomControlsEl?.addEventListener('click', onZoomControlClick);
+  scaleControlsEl?.addEventListener('click', onScaleControlClick);
+  mapBtn.addEventListener('click', onMapClick);
+  layoutBtn.addEventListener('click', onLayoutClick);
   backBtn.addEventListener('click', onBackClick);
   scrimEl.addEventListener('click', onScrimClick);
   syncZoomControls();
   syncBackButton();
-  syncEditComposer();
+  syncMapButton();
+  syncLayoutButton();
   syncZoomReadout();
   setFocusProgress(0);
+
+  function wireChromeLabelDrag(label: HTMLElement): void {
+    if (label.dataset.dragBound === '1') return;
+    label.dataset.dragBound = '1';
+
+    label.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || isFocused() || spaceHeld) return;
+      const id = label.dataset.chromeNode;
+      if (!id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!beginNodeDrag(id, event.clientX, event.clientY)) return;
+      chromeDragPointerId = event.pointerId;
+      chromeDragNodeId = id;
+      chromeDragMoved = false;
+      label.classList.add('is-dragging');
+      label.setPointerCapture(event.pointerId);
+    });
+
+    label.addEventListener('pointermove', (event) => {
+      if (chromeDragPointerId !== event.pointerId || !chromeDragNodeId) return;
+      const dx = event.clientX - dragPointerStartX;
+      const dy = event.clientY - dragPointerStartY;
+      if (!chromeDragMoved && Math.hypot(dx, dy) < 4) return;
+      chromeDragMoved = true;
+      moveNodeDrag(chromeDragNodeId, event.clientX, event.clientY);
+    });
+
+    const endChromeDrag = (event: PointerEvent): void => {
+      if (chromeDragPointerId !== event.pointerId || !chromeDragNodeId) return;
+      const id = chromeDragNodeId;
+      const moved = chromeDragMoved;
+      chromeDragPointerId = null;
+      chromeDragNodeId = null;
+      chromeDragMoved = false;
+      try {
+        label.releasePointerCapture(event.pointerId);
+      } catch {
+        // already released
+      }
+      endNodeDrag(id, moved);
+      if (!moved) void selectNode(id);
+    };
+
+    label.addEventListener('pointerup', endChromeDrag);
+    label.addEventListener('pointercancel', endChromeDrag);
+
+    label.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = label.dataset.chromeNode;
+      if (id) void focusNode(id);
+    });
+  }
+
+  async function onMapClick(): Promise<void> {
+    if (!host.mapApplication || mapBusy || isFocused()) return;
+    mapBusy = true;
+    syncMapButton();
+    syncLayoutButton();
+    try {
+      const result = await host.mapApplication('merge');
+      applyDocument(
+        result.document,
+        `Mapped ${result.discovered} screens (${result.added} added, ${result.updated} updated)`
+      );
+      fitOverviewToContent();
+      snapshotGeneration += 1;
+      snapshotCache.clear();
+      snapshotErrors.clear();
+      snapshotQueue = [];
+      snapshotInFlight = null;
+      if (semanticLevel === 'meso') scheduleMesoSnapshots();
+    } catch (error) {
+      setStatus(errorMessage(error));
+    } finally {
+      mapBusy = false;
+      syncMapButton();
+      syncLayoutButton();
+    }
+  }
+
+  async function onLayoutClick(): Promise<void> {
+    if (!host.autoLayout || layoutBusy || mapBusy || isFocused()) return;
+    layoutBusy = true;
+    syncLayoutButton();
+    try {
+      const doc = await host.autoLayout();
+      applyDocument(doc, 'Auto layout');
+      fitOverviewToContent();
+    } catch (error) {
+      setStatus(errorMessage(error));
+    } finally {
+      layoutBusy = false;
+      syncLayoutButton();
+    }
+  }
+
+  function syncMapButton(): void {
+    mapBtn.hidden = !host.mapApplication || isFocused();
+    mapBtn.disabled = mapBusy || layoutBusy || isFocused();
+    mapBtn.dataset.busy = mapBusy ? 'true' : 'false';
+    mapBtn.textContent = mapBusy ? 'Mapping…' : 'Map';
+  }
+
+  function syncLayoutButton(): void {
+    layoutBtn.hidden = !host.autoLayout || isFocused();
+    layoutBtn.disabled = layoutBusy || mapBusy || isFocused();
+    layoutBtn.dataset.busy = layoutBusy ? 'true' : 'false';
+    layoutBtn.textContent = layoutBusy ? 'Layout…' : 'Auto layout';
+  }
 
   const unsubscribeLive = host.onDocument?.((doc) => {
     if (draggingNodeId) return;
@@ -1348,7 +1581,6 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
       sdcGlobal.__sdcTeardown = undefined;
     }
     unsubscribeLive?.();
-    editComposer?.destroy();
     snapshotGeneration += 1;
     snapshotQueue = [];
     snapshotCache.clear();
@@ -1375,10 +1607,13 @@ export function mountCanvasRenderer(options: CanvasRendererOptions): {
     window.removeEventListener('resize', onViewportResize);
     colorSchemeQuery.removeEventListener('change', onColorSchemeChange);
     zoomControlsEl?.removeEventListener('click', onZoomControlClick);
+    scaleControlsEl?.removeEventListener('click', onScaleControlClick);
+    mapBtn.removeEventListener('click', onMapClick);
+    layoutBtn.removeEventListener('click', onLayoutClick);
     backBtn.removeEventListener('click', onBackClick);
     scrimEl.removeEventListener('click', onScrimClick);
     backBtn.remove();
-    zoomReadoutEl.remove();
+    if (zoomReadoutEl.classList.contains('zoom-readout')) zoomReadoutEl.remove();
     scrimEl.remove();
     focusFrontEl.remove();
   }
@@ -1471,8 +1706,52 @@ function ensureBackButton(viewportEl: HTMLElement): HTMLButtonElement {
   return button;
 }
 
+function ensureMapButton(viewportEl: HTMLElement, enabled: boolean): HTMLButtonElement {
+  const existing = viewportEl.querySelector<HTMLButtonElement>('#map-app-btn');
+  if (existing) {
+    existing.hidden = !enabled;
+    return existing;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'map-app-btn';
+  button.className = 'map-app-btn';
+  button.textContent = 'Map';
+  button.title = 'Crawl the running host and update the graph';
+  button.setAttribute('aria-label', 'Map running application');
+  button.hidden = !enabled;
+  const dock = viewportEl.querySelector('.canvas-dock');
+  if (dock) dock.appendChild(button);
+  else viewportEl.appendChild(button);
+  return button;
+}
+
+function ensureLayoutButton(viewportEl: HTMLElement, enabled: boolean): HTMLButtonElement {
+  const existing = viewportEl.querySelector<HTMLButtonElement>('#auto-layout-btn');
+  if (existing) {
+    existing.hidden = !enabled;
+    return existing;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'auto-layout-btn';
+  button.className = 'map-app-btn';
+  button.textContent = 'Auto layout';
+  button.title = 'Arrange modules and screens by route depth';
+  button.setAttribute('aria-label', 'Auto layout nodes');
+  button.hidden = !enabled;
+  const dock = viewportEl.querySelector('.canvas-dock');
+  if (dock) dock.appendChild(button);
+  else viewportEl.appendChild(button);
+  return button;
+}
+
 function ensureZoomReadout(viewportEl: HTMLElement): HTMLElement {
-  const existing = viewportEl.querySelector<HTMLElement>('.zoom-readout');
+  const existing =
+    viewportEl.querySelector<HTMLElement>('.scale-readout') ??
+    viewportEl.querySelector<HTMLElement>('.zoom-readout');
   if (existing) return existing;
 
   const readout = document.createElement('div');

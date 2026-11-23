@@ -1,8 +1,8 @@
 {
-  "name": "spatial-design-canvas",
+  "name": "vista-canvas",
   "version": "0.1.0",
   "private": true,
-  "description": "Repo-agnostic spatial live-code design canvas (webapp + MCP App adapter + Agent Skills)",
+  "description": "Vista Canvas — map a running host app (screens, flows, states) as a shared human+agent design surface",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -10,7 +10,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "spatial-design-canvas-mcp": "./dist/mcp/main.js"
+    "vista-canvas-mcp": "./dist/mcp/main.js"
   },
   "scripts": {
     "dev": "concurrently -n api,ui,tsc -c teal,cyan,gray \"npm:dev:api\" \"npm:dev:ui\" \"npm:dev:server\"",
@@ -23,7 +23,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.canvas.json --noEmit",
     "start": "node dist/index.js",
     "start:mcp": "node dist/mcp/main.js",
-    "start:web": "node dist/web/main.js",
+    "start:web": "DESIGN_CANVAS_SERVE_UI=1 DESIGN_CANVAS_API_PORT=4173 node dist/web/main.js",
+    "package:mock-bank": "node scripts/package-mock-bank.mjs",
+    "demo:host": "node scripts/demo-host.mjs",
+    "export:demo": "node scripts/export-demo.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "devDependencies": {
@@ -36,7 +39,6 @@
     "vite-plugin-singlefile": "^2.3.4"
   },
   "dependencies": {
-    "@cursor/sdk": "^1.4.2",
     "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/ext-apps": "^2.0.4",
     "@modelcontextprotocol/server": "^2.4.0",

@@ -4,7 +4,8 @@ import {
   type CanvasHostConfig,
   type CanvasPoint,
   type DesignCanvasDocument,
-  type EditEvent,
+  type MapApplicationResult,
+  type MapMode,
   type SemanticZoomLevel,
   type SnapshotRequest,
 } from './types';
@@ -12,19 +13,6 @@ import {
 interface SharedEventSource {
   source: EventSource;
   documentHandlers: Set<(document: DesignCanvasDocument) => void>;
-  editHandlers: Set<(event: EditEvent) => void>;
-}
-
-function isEditEvent(value: unknown): value is EditEvent {
-  if (typeof value !== 'object' || value === null) return false;
-  const event = value as Partial<EditEvent>;
-  return (
-    typeof event.nodeId === 'string' &&
-    (event.status === 'running' ||
-      event.status === 'finished' ||
-      event.status === 'error' ||
-      event.status === 'cancelled')
-  );
 }
 
 export function createWebHost(apiBase = ''): CanvasHost {
@@ -56,29 +44,6 @@ export function createWebHost(apiBase = ''): CanvasHost {
     return payload;
   }
 
-  async function requestJson<T>(
-    path: string,
-    init?: RequestInit,
-    okStatuses: number[] = [200]
-  ): Promise<T> {
-    const response = await fetch(`${base}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-      ...init,
-    });
-    const payload: unknown = await response.json();
-    if (!okStatuses.includes(response.status)) {
-      const message =
-        typeof payload === 'object' &&
-        payload !== null &&
-        'error' in payload &&
-        typeof (payload as { error: unknown }).error === 'string'
-          ? (payload as { error: string }).error
-          : `HTTP ${response.status}`;
-      throw new Error(message);
-    }
-    return payload as T;
-  }
-
   function ensureEvents(): SharedEventSource {
     const existing = g.__sdcEvents;
     if (existing && existing.source.readyState !== EventSource.CLOSED) {
@@ -89,7 +54,6 @@ export function createWebHost(apiBase = ''): CanvasHost {
     const shared: SharedEventSource = {
       source: new EventSource(`${base}/api/events`),
       documentHandlers: new Set(),
-      editHandlers: new Set(),
     };
 
     shared.source.addEventListener('document', ((event: MessageEvent<string>) => {
@@ -97,16 +61,6 @@ export function createWebHost(apiBase = ''): CanvasHost {
         const parsed: unknown = JSON.parse(event.data);
         if (!isDesignCanvasDocument(parsed)) return;
         for (const handler of shared.documentHandlers) handler(parsed);
-      } catch {
-        // ignore malformed SSE payloads
-      }
-    }) as EventListener);
-
-    shared.source.addEventListener('edit', ((event: MessageEvent<string>) => {
-      try {
-        const parsed: unknown = JSON.parse(event.data);
-        if (!isEditEvent(parsed)) return;
-        for (const handler of shared.editHandlers) handler(parsed);
       } catch {
         // ignore malformed SSE payloads
       }
@@ -124,17 +78,23 @@ export function createWebHost(apiBase = ''): CanvasHost {
     loadDocument: () => request('/api/canvas'),
 
     async getConfig(): Promise<CanvasHostConfig> {
-      const response = await fetch(`${base}/api/config`);
-      const payload: unknown = await response.json();
-      if (
-        !response.ok ||
-        typeof payload !== 'object' ||
-        payload === null ||
-        typeof (payload as { appOrigin?: unknown }).appOrigin !== 'string'
-      ) {
+      try {
+        const response = await fetch(`${base}/api/config`);
+        if (!response.ok) return { appOrigin: 'http://localhost:4200' };
+        const text = await response.text();
+        if (!text.trim()) return { appOrigin: 'http://localhost:4200' };
+        const payload: unknown = JSON.parse(text);
+        if (
+          typeof payload !== 'object' ||
+          payload === null ||
+          typeof (payload as { appOrigin?: unknown }).appOrigin !== 'string'
+        ) {
+          return { appOrigin: 'http://localhost:4200' };
+        }
+        return { appOrigin: (payload as { appOrigin: string }).appOrigin };
+      } catch {
         return { appOrigin: 'http://localhost:4200' };
       }
-      return { appOrigin: (payload as { appOrigin: string }).appOrigin };
     },
 
     selectNode: (nodeId) =>
@@ -195,27 +155,42 @@ export function createWebHost(apiBase = ''): CanvasHost {
       return response.blob();
     },
 
-    requestEdit: (prompt, nodeId) =>
-      requestJson<{ accepted: true; nodeId: string }>(
-        '/api/edit',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            prompt,
-            ...(nodeId !== undefined ? { nodeId } : {}),
-          }),
-        },
-        [202]
-      ),
-
-    resetEdit: () =>
-      requestJson<{ reset: true }>('/api/edit/reset', {
+    async mapApplication(mode: MapMode = 'merge'): Promise<MapApplicationResult> {
+      const response = await fetch(`${base}/api/map`, {
         method: 'POST',
-        body: '{}',
-      }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok) {
+        const message =
+          typeof payload === 'object' &&
+          payload !== null &&
+          'error' in payload &&
+          typeof (payload as { error: unknown }).error === 'string'
+            ? (payload as { error: string }).error
+            : `HTTP ${response.status}`;
+        throw new Error(message);
+      }
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('document' in payload) ||
+        !isDesignCanvasDocument((payload as { document: unknown }).document)
+      ) {
+        throw new Error('Unexpected response from /api/map');
+      }
+      const body = payload as MapApplicationResult;
+      return {
+        document: body.document,
+        discovered: Number(body.discovered) || 0,
+        added: Number(body.added) || 0,
+        updated: Number(body.updated) || 0,
+      };
+    },
 
-    cancelEdit: () =>
-      requestJson<{ cancelled: boolean }>('/api/edit/cancel', {
+    autoLayout: () =>
+      request('/api/layout', {
         method: 'POST',
         body: '{}',
       }),
@@ -228,19 +203,10 @@ export function createWebHost(apiBase = ''): CanvasHost {
         maybeCloseEvents(shared);
       };
     },
-
-    onEdit(handler) {
-      const shared = ensureEvents();
-      shared.editHandlers.add(handler);
-      return () => {
-        shared.editHandlers.delete(handler);
-        maybeCloseEvents(shared);
-      };
-    },
   };
 
   function maybeCloseEvents(shared: SharedEventSource): void {
-    if (shared.documentHandlers.size > 0 || shared.editHandlers.size > 0) return;
+    if (shared.documentHandlers.size > 0) return;
     shared.source.close();
     if (g.__sdcEvents === shared) g.__sdcEvents = undefined;
   }

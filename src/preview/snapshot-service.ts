@@ -1,5 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
+import { resolveStorageStatePath } from './playwright-auth.js';
+
 export type SnapshotColorScheme = 'light' | 'dark';
 
 export interface SnapshotRequest {
@@ -161,8 +163,10 @@ export class SnapshotService {
     }
 
     if (!this.context) {
+      const storageState = resolveStorageStatePath();
       this.context = await this.browser.newContext({
         deviceScaleFactor: this.deviceScaleFactor,
+        ...(storageState ? { storageState } : {}),
       });
     }
 

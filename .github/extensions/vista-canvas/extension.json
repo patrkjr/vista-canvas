@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "initialization": "module",
+  "canvases": [
+    {
+      "id": "vista-canvas",
+      "displayName": "Vista Canvas",
+      "description": "Map and inspect a running host app (MFEs may load from CDN) on a shared design canvas.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Absolute path to the target app repo containing .design-canvas.json."
+          },
+          "appOrigin": {
+            "type": "string",
+            "description": "Origin of the running host shell (default http://localhost:4200)."
+          }
+        }
+      },
+      "actions": [
+        {
+          "name": "list_canvas",
+          "description": "Return the current design canvas document (nodes, edges, view)."
+        },
+        {
+          "name": "map_application",
+          "description": "Crawl the running host via Playwright and upsert screen nodes into the graph.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["merge", "replace"],
+                "description": "Default merge. merge upserts screens and keeps modules/fixtures; replace rebuilds screens but remaps fixture parents onto surviving routes."
+              }
+            }
+          }
+        },
+        {
+          "name": "auto_layout",
+          "description": "Reposition modules and screens into columns by route depth."
+        },
+        {
+          "name": "add_screen_node",
+          "description": "Add a screen node to the design canvas graph.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "route": { "type": "string" },
+              "mfe": { "type": "string" },
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "dataScreen": { "type": "string" }
+            },
+            "required": ["id", "title", "route", "mfe", "x", "y"]
+          }
+        },
+        {
+          "name": "add_fixture_node",
+          "description": "Add a curated screen state (fixture) child. previewPath should include ?fixture=<key>.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "parentId": { "type": "string" },
+              "title": { "type": "string" },
+              "fixture": { "type": "string" },
+              "previewPath": { "type": "string" },
+              "mfe": { "type": "string" },
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            },
+            "required": ["id", "parentId", "title", "fixture", "previewPath"]
+          }
+        },
+        {
+          "name": "add_module_node",
+          "description": "Add a module (chrome/slot) node such as a nav rail.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "route": { "type": "string" },
+              "mfe": { "type": "string" },
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "previewPath": { "type": "string" },
+              "dataScreen": { "type": "string" },
+              "frame": {
+                "type": "object",
+                "properties": {
+                  "width": { "type": "number" },
+                  "height": { "type": "number" }
+                },
+                "required": ["width", "height"]
+              },
+              "parentId": { "type": "string" }
+            },
+            "required": ["id", "title", "route", "mfe", "x", "y"]
+          }
+        },
+        {
+          "name": "select_node",
+          "description": "Select a canvas node, or pass null to clear selection.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "nodeId": { "type": ["string", "null"] }
+            },
+            "required": ["nodeId"]
+          }
+        },
+        {
+          "name": "focus_node",
+          "description": "Enter or exit the focused live workspace for a node.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "nodeId": { "type": ["string", "null"] }
+            },
+            "required": ["nodeId"]
+          }
+        },
+        {
+          "name": "move_node",
+          "description": "Move a screen or module node on the canvas.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "nodeId": { "type": "string" },
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            },
+            "required": ["nodeId", "x", "y"]
+          }
+        },
+        {
+          "name": "update_view",
+          "description": "Persist pan/zoom, selection, focus, or overview level.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "pan": {
+                "type": "object",
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" }
+                },
+                "required": ["x", "y"]
+              },
+              "zoom": { "type": "number" },
+              "selectedNodeId": { "type": ["string", "null"] },
+              "focusedNodeId": { "type": ["string", "null"] },
+              "semanticZoomLevel": {
+                "type": "string",
+                "enum": ["macro", "meso", "micro"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

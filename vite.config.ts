@@ -3,6 +3,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 
 const mode = process.env.CANVAS_BUILD_MODE ?? 'web';
 const isMcpBundle = mode === 'mcp';
+const isStaticExport = mode === 'static';
 const isDevelopment = process.env.NODE_ENV === 'development';
 const apiPort = Number(process.env.DESIGN_CANVAS_API_PORT ?? 4174);
 
@@ -19,6 +20,8 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 4173,
     strictPort: true,
+    // Cloudflare quick tunnels (demo hosting)
+    allowedHosts: ['.trycloudflare.com', 'localhost', '127.0.0.1'],
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${apiPort}`,
@@ -42,9 +45,13 @@ export default defineConfig({
     cssMinify: !isDevelopment,
     minify: !isDevelopment,
     rollupOptions: {
-      input: isMcpBundle ? 'design-canvas.html' : 'index.html',
+      input: isMcpBundle
+        ? 'design-canvas.html'
+        : isStaticExport
+          ? 'export.html'
+          : 'index.html',
     },
-    outDir: 'dist',
-    emptyOutDir: false,
+    outDir: isStaticExport ? 'demo/export' : 'dist',
+    emptyOutDir: isStaticExport,
   },
 });

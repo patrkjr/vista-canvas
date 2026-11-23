@@ -1,6 +1,9 @@
 import { watch, type FSWatcher } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, type Server } from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { z } from 'zod';
 
@@ -12,7 +15,6 @@ import {
 } from '../preview/snapshot-service.js';
 import type { DesignCanvasDocument } from '../types/domain.js';
 import { SemanticZoomLevelSchema } from '../types/schema.js';
-import { EditAgent, EditAgentError } from './edit-agent.js';
 
 const AddNodeBodySchema = z.object({
   id: z.string().min(1),
@@ -75,19 +77,37 @@ const ViewBodySchema = z.object({
   semanticZoomLevel: SemanticZoomLevelSchema.optional(),
 });
 
-const EditBodySchema = z.object({
-  prompt: z.string().min(1),
-  nodeId: z.string().min(1).optional(),
+const MapBodySchema = z.object({
+  mode: z.enum(['merge', 'replace']).optional(),
 });
+
+const SCOPE_VERSION = 9;
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json; charset=utf-8',
+};
 
 export interface WebServerOptions {
   host?: string;
   port?: number;
   actions?: CanvasActions;
-  editAgent?: EditAgent;
   corsOrigin?: string;
   /** Origin of the target app shell (iframe mounts). Defaults to DESIGN_CANVAS_APP_ORIGIN or :4200. */
   appOrigin?: string;
+  /** Serve Vite `dist/` UI alongside `/api` (Copilot / start:web). */
+  serveUi?: boolean;
+  /** Directory containing built index.html (default: package dist/). */
+  uiRoot?: string;
 }
 
 export interface RunningWebServer {
@@ -98,17 +118,24 @@ export interface RunningWebServer {
 }
 
 /**
- * Agent HTTP API + SSE. Vite UI proxies `/api` here.
- * Default port 4174 so the browser surface stays on 4173.
+ * Agent HTTP API + SSE. Vite UI proxies `/api` here in dev.
+ * With DESIGN_CANVAS_SERVE_UI=1, also serves the built web UI (default port 4173).
  */
 export function createWebServer(options: WebServerOptions = {}): RunningWebServer {
+  const serveUi =
+    options.serveUi ??
+    (process.env.DESIGN_CANVAS_SERVE_UI === '1' ||
+      process.env.DESIGN_CANVAS_SERVE_UI === 'true');
   const host = options.host ?? '127.0.0.1';
-  const port = options.port ?? Number(process.env.DESIGN_CANVAS_API_PORT ?? 4174);
+  const port =
+    options.port ??
+    Number(process.env.DESIGN_CANVAS_API_PORT ?? (serveUi ? 4173 : 4174));
   const corsOrigin = options.corsOrigin ?? process.env.DESIGN_CANVAS_CORS_ORIGIN ?? '*';
   const appOrigin = resolveAppOrigin(options.appOrigin);
   const actions = options.actions ?? new CanvasActions();
-  const editAgent = options.editAgent ?? new EditAgent();
   const snapshots = new SnapshotService();
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const uiRoot = options.uiRoot ?? path.join(packageRoot, 'dist');
 
   const sseClients = new Set<ServerResponse>();
   let lastPayload = '';
@@ -125,20 +152,7 @@ export function createWebServer(options: WebServerOptions = {}): RunningWebServe
     }
   };
 
-  const broadcastEdit = (payload: unknown): void => {
-    const chunk = `event: edit\ndata: ${JSON.stringify(payload)}\n\n`;
-    for (const client of sseClients) {
-      client.write(chunk);
-    }
-  };
-
   const unsubscribeActions = actions.subscribe(broadcast);
-  const unsubscribeEdit = editAgent.subscribe((event) => {
-    broadcastEdit(event);
-    if (event.status === 'finished') {
-      snapshots.invalidate();
-    }
-  });
 
   const scheduleFileReload = (): void => {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -264,34 +278,25 @@ export function createWebServer(options: WebServerOptions = {}): RunningWebServe
         return sendJson(res, 200, document);
       }
 
-      if (req.method === 'POST' && pathname === '/api/edit') {
-        const body = EditBodySchema.parse(await readJson(req));
-        const document = await actions.list();
-        const nodeId = body.nodeId ?? document.view.focusedNodeId;
-        if (!nodeId) {
-          return sendJson(res, 400, {
-            error: 'No focused node. Focus a screen first, or pass nodeId.',
-          });
-        }
-        const node = document.nodes.find((candidate) => candidate.id === nodeId);
-        if (!node) {
-          return sendJson(res, 400, { error: `Unknown node: ${nodeId}` });
-        }
-        const result = await editAgent.send({
-          prompt: body.prompt,
-          node,
+      if (req.method === 'POST' && pathname === '/api/map') {
+        const body = MapBodySchema.parse(await readJson(req));
+        const result = await actions.mapApplication({
+          ...(body.mode !== undefined ? { mode: body.mode } : {}),
+          appOrigin,
         });
-        return sendJson(res, 202, result);
+        snapshots.invalidate();
+        return sendJson(res, 200, {
+          document: result.document,
+          discovered: result.discovered,
+          added: result.added,
+          updated: result.updated,
+        });
       }
 
-      if (req.method === 'POST' && pathname === '/api/edit/cancel') {
-        const result = await editAgent.cancel();
-        return sendJson(res, 200, result);
-      }
-
-      if (req.method === 'POST' && pathname === '/api/edit/reset') {
-        const result = await editAgent.reset();
-        return sendJson(res, 200, result);
+      if (req.method === 'POST' && pathname === '/api/layout') {
+        const document = await actions.autoLayout();
+        snapshots.invalidate();
+        return sendJson(res, 200, document);
       }
 
       if (req.method === 'GET' && pathname === '/api/events') {
@@ -314,16 +319,16 @@ export function createWebServer(options: WebServerOptions = {}): RunningWebServe
       if (req.method === 'GET' && pathname === '/api/config') {
         return sendJson(res, 200, {
           appOrigin,
-          sprint: 8,
-          editConfigured: editAgent.configured,
+          sprint: SCOPE_VERSION,
+          serveUi,
         });
       }
 
       if (req.method === 'GET' && pathname === '/api/health') {
         return sendJson(res, 200, {
           ok: true,
-          sprint: 8,
-          editConfigured: editAgent.configured,
+          sprint: SCOPE_VERSION,
+          serveUi,
         });
       }
 
@@ -360,11 +365,13 @@ export function createWebServer(options: WebServerOptions = {}): RunningWebServe
         return sendJson(res, 200, { cleared });
       }
 
+      if (serveUi && (req.method === 'GET' || req.method === 'HEAD')) {
+        const served = await tryServeStatic(res, uiRoot, pathname, req.method === 'HEAD');
+        if (served) return;
+      }
+
       sendJson(res, 404, { error: 'Not found' });
     } catch (error) {
-      if (error instanceof EditAgentError) {
-        return sendJson(res, error.status, { error: error.message });
-      }
       const status = isZodError(error) ? 400 : 500;
       sendJson(res, status, { error: errorMessage(error) });
     }
@@ -378,18 +385,61 @@ export function createWebServer(options: WebServerOptions = {}): RunningWebServe
     host,
     close: async () => {
       unsubscribeActions();
-      unsubscribeEdit();
       if (debounceTimer) clearTimeout(debounceTimer);
       fileWatcher?.close();
       for (const client of sseClients) client.end();
       sseClients.clear();
-      await editAgent.close();
       await snapshots.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     },
   };
+}
+
+async function tryServeStatic(
+  res: ServerResponse,
+  uiRoot: string,
+  pathname: string,
+  headOnly: boolean
+): Promise<boolean> {
+  const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\//, '');
+  if (relative.includes('..')) return false;
+  const filePath = path.resolve(uiRoot, relative);
+  if (!filePath.startsWith(path.resolve(uiRoot))) return false;
+
+  try {
+    const bytes = await readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
+      'Content-Length': bytes.byteLength,
+      'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=60',
+    });
+    if (!headOnly) res.end(bytes);
+    else res.end();
+    return true;
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+  }
+
+  // SPA fallback for non-file routes.
+  if (!path.extname(pathname)) {
+    try {
+      const indexBytes = await readFile(path.join(uiRoot, 'index.html'));
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': indexBytes.byteLength,
+        'Cache-Control': 'no-store',
+      });
+      if (!headOnly) res.end(indexBytes);
+      else res.end();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function applyCors(res: ServerResponse, origin: string): void {
@@ -419,6 +469,15 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 function isZodError(error: unknown): boolean {
   return error instanceof z.ZodError;
+}
+
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: string }).code === 'ENOENT'
+  );
 }
 
 function errorMessage(error: unknown): string {

@@ -10,9 +10,9 @@ export { createWebServer } from './web/http.js';
 export { buildPreviewUrl, resolveAppOrigin, resolvePreviewPath } from './preview/preview-url.js';
 
 export const CANVAS_METADATA: DesignCanvasMetadata = {
-  name: 'spatial-design-canvas',
+  name: 'vista-canvas',
   version: '0.1.0',
-  currentSprint: 7,
+  currentSprint: 9,
   supportedZoomLevels: ['macro', 'meso'],
   supportedRenderModes: ['structural', 'styled'],
   plannedAdapters: ['web-iframe', 'snapshot', 'native-stream'],
@@ -20,6 +20,6 @@ export const CANVAS_METADATA: DesignCanvasMetadata = {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(
-    `[${CANVAS_METADATA.name} v${CANVAS_METADATA.version}] Sprint ${CANVAS_METADATA.currentSprint} — Meso bitmap snapshots.`
+    `[${CANVAS_METADATA.name} v${CANVAS_METADATA.version}] Scope ${CANVAS_METADATA.currentSprint} — Runtime mapping + Copilot canvas.`
   );
 }

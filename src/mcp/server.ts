@@ -20,7 +20,7 @@ const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 export function createDesignCanvasServer(actions = new CanvasActions()): McpServer {
   const server = new McpServer({
-    name: 'spatial-design-canvas',
+    name: 'vista-canvas',
     version: '0.1.0',
   });
 
@@ -30,7 +30,7 @@ export function createDesignCanvasServer(actions = new CanvasActions()): McpServ
     {
       title: 'Open Design Canvas',
       description:
-        'Open the spatial design canvas UI and return the current .design-canvas.json document.',
+        'Open the Vista Canvas UI and return the current .design-canvas.json document.',
       inputSchema: z.object({}),
       _meta: {
         ui: { resourceUri: DESIGN_CANVAS_RESOURCE_URI },
@@ -261,6 +261,57 @@ export function createDesignCanvasServer(actions = new CanvasActions()): McpServ
       try {
         const document = await actions.list();
         return documentToolResult('Current design canvas document.', document);
+      } catch (error) {
+        return errorToolResult(errorMessage(error));
+      }
+    }
+  );
+
+  registerAppTool(
+    server,
+    'map_application',
+    {
+      title: 'Map Application',
+      description:
+        'Crawl the running host app (DESIGN_CANVAS_APP_ORIGIN) via Playwright and upsert screen nodes into .design-canvas.json. Remotes may load from CDN inside the host.',
+      inputSchema: z.object({
+        mode: z.enum(['merge', 'replace']).optional(),
+      }),
+      _meta: {
+        ui: { resourceUri: DESIGN_CANVAS_RESOURCE_URI },
+      },
+    },
+    async (args) => {
+      try {
+        const result = await actions.mapApplication({
+          ...(args.mode !== undefined ? { mode: args.mode } : {}),
+        });
+        return documentToolResult(
+          `Mapped ${result.discovered} screens (${result.added} added, ${result.updated} updated).`,
+          result.document
+        );
+      } catch (error) {
+        return errorToolResult(errorMessage(error));
+      }
+    }
+  );
+
+  registerAppTool(
+    server,
+    'auto_layout',
+    {
+      title: 'Auto Layout',
+      description:
+        'Reposition modules and screens into columns by route depth so nodes do not overlap.',
+      inputSchema: z.object({}),
+      _meta: {
+        ui: { resourceUri: DESIGN_CANVAS_RESOURCE_URI },
+      },
+    },
+    async () => {
+      try {
+        const document = await actions.autoLayout();
+        return documentToolResult('Auto-laid out canvas nodes.', document);
       } catch (error) {
         return errorToolResult(errorMessage(error));
       }

@@ -1,5 +1,11 @@
+import { mapRunningApp } from '../preview/runtime-mapper.js';
+import { resolveAppOrigin } from '../preview/preview-url.js';
 import type { CanvasNode, CanvasViewState, DesignCanvasDocument } from '../types/domain.js';
-import { CanvasStore } from '../store/canvas-store.js';
+import {
+  CanvasStore,
+  type ApplyRuntimeMapResult,
+  type MapMode,
+} from '../store/canvas-store.js';
 
 export type DocumentListener = (document: DesignCanvasDocument) => void;
 
@@ -145,6 +151,32 @@ export class CanvasActions {
     return document;
   }
 
+  /**
+   * Crawl DESIGN_CANVAS_APP_ORIGIN (or override) and upsert screens into the graph.
+   */
+  async mapApplication(options?: {
+    mode?: MapMode;
+    appOrigin?: string;
+  }): Promise<ApplyRuntimeMapResult> {
+    const appOrigin = resolveAppOrigin(options?.appOrigin);
+    const crawl = await mapRunningApp({ appOrigin });
+    const result = await this.store.applyRuntimeMap({
+      mode: options?.mode ?? 'merge',
+      screens: crawl.screens,
+      edges: crawl.edges,
+      chromeDestinations: crawl.chromeDestinations ?? [],
+    });
+    this.emit(result.document);
+    return result;
+  }
+
+  /** Column layout by route depth for modules + screens. */
+  async autoLayout(): Promise<DesignCanvasDocument> {
+    const document = await this.store.applyAutoLayout();
+    this.emit(document);
+    return document;
+  }
+
   private emit(document: DesignCanvasDocument): void {
     for (const listener of this.listeners) {
       try {
@@ -156,4 +188,4 @@ export class CanvasActions {
   }
 }
 
-export type { CanvasNode, DesignCanvasDocument };
+export type { CanvasNode, DesignCanvasDocument, ApplyRuntimeMapResult, MapMode };

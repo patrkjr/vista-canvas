@@ -1,5 +1,8 @@
 node_modules/
 dist/
+demo/mock-bank/
+demo/export/
+demo/seed/
 coverage/
 *.tsbuildinfo
 .DS_Store

@@ -61,13 +61,13 @@ export interface SnapshotRequest {
   colorScheme: SnapshotColorScheme;
 }
 
-export type EditRunStatus = 'running' | 'finished' | 'error' | 'cancelled';
+export type MapMode = 'merge' | 'replace';
 
-export interface EditEvent {
-  status: EditRunStatus;
-  nodeId: string;
-  text?: string;
-  error?: string;
+export interface MapApplicationResult {
+  document: DesignCanvasDocument;
+  discovered: number;
+  added: number;
+  updated: number;
 }
 
 export interface CanvasHost {
@@ -87,11 +87,10 @@ export interface CanvasHost {
   onDocument?(handler: (document: DesignCanvasDocument) => void): () => void;
   /** Optional meso stills (web host). MCP omits — meso shows skeletons only. */
   getSnapshot?(request: SnapshotRequest): Promise<Blob>;
-  /** Canvas → agent edit (web host). MCP omits — no composer. */
-  requestEdit?(prompt: string, nodeId?: string): Promise<{ accepted: true; nodeId: string }>;
-  resetEdit?(): Promise<{ reset: true }>;
-  cancelEdit?(): Promise<{ cancelled: boolean }>;
-  onEdit?(handler: (event: EditEvent) => void): () => void;
+  /** Crawl the running host and upsert screen nodes (web host). */
+  mapApplication?(mode?: MapMode): Promise<MapApplicationResult>;
+  /** Column layout by route depth (web host). */
+  autoLayout?(): Promise<DesignCanvasDocument>;
 }
 
 export function isDesignCanvasDocument(value: unknown): value is DesignCanvasDocument {
